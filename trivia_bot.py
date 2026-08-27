@@ -6,6 +6,7 @@ import random
 import time
 from dataclasses import dataclass, field
 
+from aiohttp import web
 import httpx
 from telegram import Poll, Update
 from telegram.ext import (
@@ -29,6 +30,7 @@ ACCESS_CODE = os.environ.get("QUIZ_ACCESS_CODE", "TRIVIA123").strip()
 # Conversation States for Admin Creation Wizard
 WAIT_CODE, WAIT_TIMER, WAIT_QUESTION, WAIT_CORRECT, WAIT_WRONG_1, WAIT_WRONG_2 = range(6)
 
+
 @dataclass
 class GameState:
     chat_id: int
@@ -42,13 +44,16 @@ class GameState:
     question_number: int = 0
     active: bool = True
 
+
 games: dict[int, GameState] = {}
 global_scores: dict[int, int] = {}    # user_id -> lifetime points
 user_names: dict[int, str] = {}       # user_id -> display name
 custom_quizzes: list[dict] = []       # Stores custom admin-created quizzes
 
+
 def truncate(text: str, limit: int) -> str:
     return text[: limit - 3] + "..." if len(text) > limit else text
+
 
 async def fetch_opentdb_questions(amount: int = 5) -> list[dict]:
     url = "https://opentdb.com/api.php"
@@ -81,6 +86,7 @@ async def fetch_opentdb_questions(amount: int = 5) -> list[dict]:
         })
     return questions
 
+
 # --- ADMIN QUIZ CREATION WIZARD ---
 
 async def start_create_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -88,12 +94,14 @@ async def start_create_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data["new_quiz"] = {"questions": []}
     return WAIT_CODE
 
+
 async def check_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.text.strip() != ACCESS_CODE:
         await update.message.reply_text("❌ Incorrect access code. Action cancelled.")
         return ConversationHandler.END
     await update.message.reply_text("✅ Access granted!\nEnter question timer in seconds (e.g., 15):")
     return WAIT_TIMER
+
 
 async def set_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
@@ -105,20 +113,24 @@ async def set_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Please enter a valid number between 5 and 60:")
         return WAIT_TIMER
 
+
 async def add_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["current_q"] = {"question": update.message.text.strip()}
     await update.message.reply_text("Enter the **CORRECT** answer option:")
     return WAIT_CORRECT
+
 
 async def add_correct_option(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["current_q"]["correct"] = update.message.text.strip()
     await update.message.reply_text("Enter Wrong Option 1:")
     return WAIT_WRONG_1
 
+
 async def add_wrong_1(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["current_q"]["wrong1"] = update.message.text.strip()
     await update.message.reply_text("Enter Wrong Option 2:")
     return WAIT_WRONG_2
+
 
 async def add_wrong_2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     cq = context.user_data["current_q"]
@@ -139,6 +151,7 @@ async def add_wrong_2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     )
     return WAIT_QUESTION
 
+
 async def finish_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     quiz_data = context.user_data.get("new_quiz")
     if not quiz_data or not quiz_data["questions"]:
@@ -152,9 +165,11 @@ async def finish_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     )
     return ConversationHandler.END
 
+
 async def cancel_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Quiz creation cancelled.")
     return ConversationHandler.END
+
 
 # --- GAME LOGIC & TRIVIA COMMANDS ---
 
@@ -183,6 +198,7 @@ async def trivia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     games[chat_id] = game
     await run_game_loop(context, game, questions)
 
+
 async def custom_trivia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     if not custom_quizzes:
@@ -201,6 +217,7 @@ async def custom_trivia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     games[chat_id] = game
     await run_game_loop(context, game, questions)
 
+
 async def run_game_loop(context: ContextTypes.DEFAULT_TYPE, game: GameState, questions: list[dict]) -> None:
     for i, q in enumerate(questions):
         if games.get(game.chat_id) is not game or not game.active:
@@ -211,6 +228,7 @@ async def run_game_loop(context: ContextTypes.DEFAULT_TYPE, game: GameState, que
     if games.get(game.chat_id) is game and game.active:
         await send_leaderboard(game.chat_id, context, caller_id=0, final=True)
         games.pop(game.chat_id, None)
+
 
 async def ask_question(context: ContextTypes.DEFAULT_TYPE, game: GameState, q: dict, index: int) -> None:
     game.question_number = index + 1
@@ -228,6 +246,7 @@ async def ask_question(context: ContextTypes.DEFAULT_TYPE, game: GameState, q: d
     )
     game.current_poll_id = msg.poll.id
     game.current_correct_index = q["correct_index"]
+
 
 async def receive_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     answer = update.poll_answer
@@ -255,10 +274,12 @@ async def receive_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE
         game.scores[user.id] = game.scores.get(user.id, 0) - 1
         global_scores[user.id] -= 1
 
+
 # --- LEADERBOARD DISPLAY ---
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_leaderboard(update.effective_chat.id, context, caller_id=update.effective_user.id, final=False)
+
 
 async def send_leaderboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE, caller_id: int, final: bool) -> None:
     if not global_scores:
@@ -299,6 +320,7 @@ async def send_leaderboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE, cal
 
     await context.bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
+
 async def stopgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     game = games.get(chat_id)
@@ -308,6 +330,7 @@ async def stopgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     game.active = False
     await send_leaderboard(chat_id, context, caller_id=update.effective_user.id, final=True)
     games.pop(chat_id, None)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -320,11 +343,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/stopgame — Stop current round"
     )
 
+
+# --- RENDER HEALTH-CHECK WEB SERVER ---
+
+async def handle_ping(request: web.Request) -> web.Response:
+    return web.Response(text="Bot is awake!")
+
+
+async def start_web_server() -> None:
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+
+async def post_init(application: Application) -> None:
+    asyncio.create_task(start_web_server())
+
+
 def main() -> None:
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         raise SystemExit("Missing valid TELEGRAM_BOT_TOKEN.")
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     # Quiz Creation Conversation Handler
     quiz_builder = ConversationHandler(
@@ -353,6 +397,7 @@ def main() -> None:
 
     logger.info("Bot started successfully...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
