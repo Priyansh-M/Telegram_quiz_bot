@@ -28,7 +28,15 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE").strip()
 ACCESS_CODE = os.environ.get("QUIZ_ACCESS_CODE", "TRIVIA123").strip()
 
 # Conversation States for Admin Creation Wizard
-WAIT_CODE, WAIT_TIMER, WAIT_QUESTION, WAIT_CORRECT, WAIT_WRONG_1, WAIT_WRONG_2 = range(6)
+(
+    WAIT_CODE,
+    WAIT_QUIZ_ID,
+    WAIT_TIMER,
+    WAIT_QUESTION,
+    WAIT_CORRECT,
+    WAIT_WRONG_1,
+    WAIT_WRONG_2,
+) = range(7)
 
 
 @dataclass
@@ -48,7 +56,7 @@ class GameState:
 games: dict[int, GameState] = {}
 global_scores: dict[int, int] = {}    # user_id -> lifetime points
 user_names: dict[int, str] = {}       # user_id -> display name
-custom_quizzes: list[dict] = []       # Stores custom admin-created quizzes
+custom_quizzes: dict[str, dict] = {}  # quiz_code -> quiz data dictionary
 
 
 def truncate(text: str, limit: int) -> str:
@@ -90,7 +98,7 @@ async def fetch_opentdb_questions(amount: int = 5) -> list[dict]:
 # --- ADMIN QUIZ CREATION WIZARD ---
 
 async def start_create_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("🔐 **Admin Verification**\nPlease enter the access code to create a custom quiz:")
+    await update.message.reply_text("🔐 **Admin Verification**\nPlease enter the admin access code to create a custom quiz:")
     context.user_data["new_quiz"] = {"questions": []}
     return WAIT_CODE
 
@@ -99,7 +107,18 @@ async def check_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.text.strip() != ACCESS_CODE:
         await update.message.reply_text("❌ Incorrect access code. Action cancelled.")
         return ConversationHandler.END
-    await update.message.reply_text("✅ Access granted!\nEnter question timer in seconds (e.g., 15):")
+    await update.message.reply_text("✅ Access granted!\nEnter a **Unique Quiz Access Code** for this quiz (e.g., `MATH101`):")
+    return WAIT_QUIZ_ID
+
+
+async def set_quiz_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    quiz_id = update.message.text.strip().upper()
+    if quiz_id in custom_quizzes:
+        await update.message.reply_text("❌ This quiz code already exists! Enter a different unique code:")
+        return WAIT_QUIZ_ID
+    
+    context.user_data["new_quiz"]["id"] = quiz_id
+    await update.message.reply_text(f"🔑 Quiz Code set to **{quiz_id}**!\nEnter question timer in seconds (e.g., 15):")
     return WAIT_TIMER
 
 
@@ -158,10 +177,13 @@ async def finish_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text("No questions created.")
         return ConversationHandler.END
     
-    custom_quizzes.append(quiz_data)
+    quiz_id = quiz_data["id"]
+    custom_quizzes[quiz_id] = quiz_data
     await update.message.reply_text(
-        f"🎉 **Quiz Published!**\nContains {len(quiz_data['questions'])} question(s) with {quiz_data['timer']}s per question.\n"
-        "Users can start it using `/custom`."
+        f"🎉 **Quiz Published!**\n"
+        f"🔑 **Unique Code:** `{quiz_id}`\n"
+        f"📊 Questions: {len(quiz_data['questions'])}\n\n"
+        f"Users in any group can start this quiz using `/custom {quiz_id}`."
     )
     return ConversationHandler.END
 
@@ -201,18 +223,30 @@ async def trivia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def custom_trivia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    if not custom_quizzes:
-        await update.message.reply_text("No custom quizzes available! Admins can make one using `/createquiz`.")
-        return
-    if chat_id in games and games[chat_id].active:
-        await update.message.reply_text("A game is running! Use /stopgame first.")
+
+    if not context.args:
+        available = ", ".join([f"`{code}`" for code in custom_quizzes.keys()]) or "None"
+        await update.message.reply_text(
+            f"❌ Please specify a quiz code!\n"
+            f"**Usage:** `/custom <quiz_code>`\n"
+            f"**Available Quizzes:** {available}"
+        )
         return
 
-    selected_quiz = custom_quizzes[-1]
+    quiz_code = context.args[0].strip().upper()
+    if quiz_code not in custom_quizzes:
+        await update.message.reply_text(f"❌ Quiz code `{quiz_code}` not found.")
+        return
+
+    if chat_id in games and games[chat_id].active:
+        await update.message.reply_text("A game is already running in this chat! Use /stopgame first.")
+        return
+
+    selected_quiz = custom_quizzes[quiz_code]
     questions = selected_quiz["questions"]
     timer = selected_quiz["timer"]
 
-    await update.message.reply_text(f"⭐ Starting Custom Admin Quiz ({len(questions)} questions)!")
+    await update.message.reply_text(f"⭐ Starting Custom Quiz **{quiz_code}** ({len(questions)} questions)!")
     game = GameState(chat_id=chat_id, total_questions=len(questions), question_time_limit=timer)
     games[chat_id] = game
     await run_game_loop(context, game, questions)
@@ -288,7 +322,6 @@ async def send_leaderboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE, cal
 
     sorted_players = sorted(global_scores.items(), key=lambda item: item[1], reverse=True)
     
-    # Compute rankings handling tied scores
     ranked_list = []
     current_rank = 1
     for idx, (uid, score) in enumerate(sorted_players):
@@ -337,7 +370,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "👋 **Welcome to Trivia Bot!**\n\n"
         "🎮 **Commands:**\n"
         "/trivia [n] — Play OpenTDB quiz (n questions)\n"
-        "/custom — Play admin custom quiz\n"
+        "/custom <quiz_code> — Play custom admin quiz\n"
         "/createquiz — Build a custom quiz (Admins)\n"
         "/leaderboard — View global rankings\n"
         "/stopgame — Stop current round"
@@ -375,6 +408,7 @@ def main() -> None:
         entry_points=[CommandHandler("createquiz", start_create_quiz)],
         states={
             WAIT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_code)],
+            WAIT_QUIZ_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_quiz_id)],
             WAIT_TIMER: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_timer)],
             WAIT_QUESTION: [
                 CommandHandler("done", finish_quiz),
