@@ -54,9 +54,10 @@ class GameState:
 
 
 games: dict[int, GameState] = {}
-global_scores: dict[int, int] = {}    # user_id -> lifetime points
-user_names: dict[int, str] = {}       # user_id -> display name
-custom_quizzes: dict[str, dict] = {}  # quiz_code -> quiz data dictionary
+lobby_scores: dict[int, dict[int, int]] = {}  # chat_id -> {user_id: points}
+global_scores: dict[int, int] = {}             # user_id -> lifetime points
+user_names: dict[int, str] = {}                # user_id -> display name
+custom_quizzes: dict[str, dict] = {}           # quiz_code -> quiz data dictionary
 
 
 def truncate(text: str, limit: int) -> str:
@@ -260,7 +261,7 @@ async def run_game_loop(context: ContextTypes.DEFAULT_TYPE, game: GameState, que
         await asyncio.sleep(game.question_time_limit + 2)
 
     if games.get(game.chat_id) is game and game.active:
-        await send_leaderboard(game.chat_id, context, caller_id=0, final=True)
+        await send_leaderboard(game.chat_id, context, caller_id=0, title="🏆 **Final Lobby Standings**", score_dict=lobby_scores.get(game.chat_id, {}))
         games.pop(game.chat_id, None)
 
 
@@ -296,31 +297,45 @@ async def receive_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE
     game.answered_users.add(user.id)
     user_names[user.id] = user.full_name
     game.names[user.id] = user.full_name
-    
+    chat_id = game.chat_id
+
+    # Initialize tracking containers if missing
+    if chat_id not in lobby_scores:
+        lobby_scores[chat_id] = {}
     if user.id not in global_scores:
         global_scores[user.id] = 0
 
     chosen = answer.option_ids[0]
     if chosen == game.current_correct_index:
         game.scores[user.id] = game.scores.get(user.id, 0) + 1
+        lobby_scores[chat_id][user.id] = lobby_scores[chat_id].get(user.id, 0) + 1
         global_scores[user.id] += 1
     else:
         game.scores[user.id] = game.scores.get(user.id, 0) - 1
+        lobby_scores[chat_id][user.id] = lobby_scores[chat_id].get(user.id, 0) - 1
         global_scores[user.id] -= 1
 
 
-# --- LEADERBOARD DISPLAY ---
+# --- LEADERBOARD DISPLAYS ---
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await send_leaderboard(update.effective_chat.id, context, caller_id=update.effective_user.id, final=False)
+    """Displays the lobby-specific standings for the current group chat."""
+    chat_id = update.effective_chat.id
+    scores_for_lobby = lobby_scores.get(chat_id, {})
+    await send_leaderboard(chat_id, context, caller_id=update.effective_user.id, title="📊 **Lobby Leaderboard**", score_dict=scores_for_lobby)
 
 
-async def send_leaderboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE, caller_id: int, final: bool) -> None:
-    if not global_scores:
+async def globalboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays the global standings across all group chats."""
+    await send_leaderboard(update.effective_chat.id, context, caller_id=update.effective_user.id, title="🌐 **Global Leaderboard**", score_dict=global_scores)
+
+
+async def send_leaderboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE, caller_id: int, title: str, score_dict: dict[int, int]) -> None:
+    if not score_dict:
         await context.bot.send_message(chat_id, "No registered player scores yet!")
         return
 
-    sorted_players = sorted(global_scores.items(), key=lambda item: item[1], reverse=True)
+    sorted_players = sorted(score_dict.items(), key=lambda item: item[1], reverse=True)
     
     ranked_list = []
     current_rank = 1
@@ -330,7 +345,7 @@ async def send_leaderboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE, cal
         ranked_list.append((current_rank, uid, score))
 
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    lines = ["🏆 **Overall Standings**\n" if final else "📊 **Current Leaderboard**\n"]
+    lines = [f"{title}\n"]
     
     caller_in_top5 = False
     caller_rank_line = None
@@ -361,7 +376,7 @@ async def stopgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No active game to stop.")
         return
     game.active = False
-    await send_leaderboard(chat_id, context, caller_id=update.effective_user.id, final=True)
+    await send_leaderboard(chat_id, context, caller_id=update.effective_user.id, title="🛑 **Game Stopped - Lobby Standings**", score_dict=lobby_scores.get(chat_id, {}))
     games.pop(chat_id, None)
 
 
@@ -372,7 +387,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/trivia [n] — Play OpenTDB quiz (n questions)\n"
         "/custom <quiz_code> — Play custom admin quiz\n"
         "/createquiz — Build a custom quiz (Admins)\n"
-        "/leaderboard — View global rankings\n"
+        "/leaderboard — View this lobby's rankings\n"
+        "/globalboard — View rankings across all groups\n"
         "/stopgame — Stop current round"
     )
 
@@ -426,6 +442,7 @@ def main() -> None:
     app.add_handler(CommandHandler("trivia", trivia))
     app.add_handler(CommandHandler("custom", custom_trivia))
     app.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    app.add_handler(CommandHandler("globalboard", globalboard_command))
     app.add_handler(CommandHandler("stopgame", stopgame))
     app.add_handler(PollAnswerHandler(receive_poll_answer))
 
