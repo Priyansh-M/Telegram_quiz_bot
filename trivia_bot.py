@@ -58,6 +58,7 @@ lobby_scores: dict[int, dict[int, int]] = {}  # chat_id -> {user_id: points}
 global_scores: dict[int, int] = {}             # user_id -> lifetime points
 user_names: dict[int, str] = {}                # user_id -> display name
 custom_quizzes: dict[str, dict] = {}           # quiz_code -> quiz data dictionary
+active_polls: dict[str, dict] = {}             # poll_id -> {chat_id, correct_index, answered}
 
 
 def truncate(text: str, limit: int) -> str:
@@ -281,37 +282,50 @@ async def ask_question(context: ContextTypes.DEFAULT_TYPE, game: GameState, q: d
     )
     game.current_poll_id = msg.poll.id
     game.current_correct_index = q["correct_index"]
+    
+    # Track poll independently to prevent answer dropping on timing transitions
+    active_polls[msg.poll.id] = {
+        "chat_id": game.chat_id,
+        "correct_index": q["correct_index"],
+        "answered": set()
+    }
 
 
 async def receive_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     answer = update.poll_answer
     user = answer.user
 
-    game = next((g for g in games.values() if g.current_poll_id == answer.poll_id and g.active), None)
-    if game is None or not answer.option_ids:
+    poll_info = active_polls.get(answer.poll_id)
+    if not poll_info or not answer.option_ids:
         return
 
-    if user.id in game.answered_users:
+    # Avoid duplicate counting for the same poll
+    if user.id in poll_info["answered"]:
         return
+    poll_info["answered"].add(user.id)
 
-    game.answered_users.add(user.id)
+    chat_id = poll_info["chat_id"]
+    correct_index = poll_info["correct_index"]
+
     user_names[user.id] = user.full_name
-    game.names[user.id] = user.full_name
-    chat_id = game.chat_id
 
-    # Initialize tracking containers if missing
+    # Initialize score tables if missing
     if chat_id not in lobby_scores:
         lobby_scores[chat_id] = {}
     if user.id not in global_scores:
         global_scores[user.id] = 0
 
+    game = games.get(chat_id)
+
     chosen = answer.option_ids[0]
-    if chosen == game.current_correct_index:
-        game.scores[user.id] = game.scores.get(user.id, 0) + 1
+    if chosen == correct_index:
+        if game:
+            game.scores[user.id] = game.scores.get(user.id, 0) + 1
         lobby_scores[chat_id][user.id] = lobby_scores[chat_id].get(user.id, 0) + 1
         global_scores[user.id] += 1
     else:
-        game.scores[user.id] = game.scores.get(user.id, 0) - 1
+        if game:
+            game.scores[user.id] = game.scores.get(user.id, 0) - 1
         lobby_scores[chat_id][user.id] = lobby_scores[chat_id].get(user.id, 0) - 1
         global_scores[user.id] -= 1
 
