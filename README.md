@@ -24,31 +24,6 @@ A Telegram bot for running live trivia games in group chats. Play random questio
 | `/globalboard` | Standings across all groups |
 | `/stopgame` | End the current round |
 
-## Setup
-
-1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
-2. Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Set environment variables:
-
-   ```bash
-   TELEGRAM_BOT_TOKEN=your-token
-   QUIZ_ACCESS_CODE=your-admin-code
-   ```
-
-4. Run it:
-
-   ```bash
-   python trivia_bot.py
-   ```
-
-## Deploying on Render
-
-Create a **Web Service**, set the start command to `python trivia_bot.py`, and add the two environment variables. The bot listens on `PORT` and responds at `/`, so an uptime monitor can ping it to keep it awake.
 
 ## Built with
 
