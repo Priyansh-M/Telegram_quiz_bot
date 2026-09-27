@@ -1,5 +1,5 @@
 # Trivia Bot
-
+Bot link : https://t.me/Terival_bot
 A Telegram bot for running live trivia games in group chats. Play random questions from the Open Trivia Database, or build your own quiz in chat and share it with a code.
 
 ## Features
